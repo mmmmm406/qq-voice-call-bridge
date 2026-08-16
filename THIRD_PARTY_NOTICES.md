@@ -1,4 +1,4 @@
-# Third-Party Notices
+# 第三方来源与声明
 
 ## maibot-qq-voice-call
 

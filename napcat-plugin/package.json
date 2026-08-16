@@ -4,7 +4,7 @@
   "version": "0.1.7",
   "type": "module",
   "main": "index.mjs",
-  "description": "OneBot controlled QQ private voice-call AVSDK bridge",
+  "description": "帮助 OneBot 接入 QQ 私聊原生语音通话的 NapCat 端桥接插件",
   "author": "QQ Voice Call contributors",
   "license": "GPL-3.0-only",
   "keywords": ["napcat", "qq", "voice-call", "onebot"],
