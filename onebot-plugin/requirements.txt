@@ -1,0 +1,3 @@
+# OneBot 桥接层的直接依赖；ASR、TTS、声纹和模型依赖由宿主环境提供。
+aiohttp>=3.9.0
+loguru>=0.7.0

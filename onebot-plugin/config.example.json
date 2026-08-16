@@ -1,0 +1,51 @@
+{
+  "enabled": false,
+  "call": {
+    "auto_accept_private": false,
+    "allow_users": [],
+    "deny_users": []
+  },
+  "dialogue": {
+    "enabled": false,
+    "mode": "full_duplex",
+    "audio": {
+      "input_device_index": null,
+      "output_device_index": null,
+      "rate": 16000,
+      "channels": 1,
+      "pause_asr_while_speaking": true,
+      "isolate_voicemeeter_route": false,
+      "tts_fade_in_ms": 10
+    },
+    "sensevoice": {
+      "asr_model_path": "<path-to-SenseVoiceSmall>",
+      "vad_model_path": "<path-to-speech-vad-model>",
+      "device": "cuda:0",
+      "language": "auto",
+      "text_norm": "withitn"
+    },
+    "voiceprint": {
+      "enable": false,
+      "enroll_path": "data/qq_voice_call/voiceprints",
+      "model_path": "<path-to-campplus_cn_common.bin>",
+      "threshold": 0.35,
+      "auto_enroll_unknown": false,
+      "minimum_enroll_duration": 3.0,
+      "default_name_prefix": "旁边的人"
+    },
+    "llm": {
+      "model_profile": "inherit_onebot",
+      "timeout": 60,
+      "max_reply_chars": 1000
+    },
+    "tts": {
+      "profile": "inherit_main",
+      "streaming": true
+    },
+    "summary": {
+      "enabled": false,
+      "system_prompt": "请准确总结这次 QQ 私聊语音通话，不要编造没有出现的内容。",
+      "writeback_template": "<qq_voice_call>{summary}</qq_voice_call>"
+    }
+  }
+}

@@ -1,0 +1,16 @@
+{
+  "name": "qq-voice-call",
+  "plugin": "QQ语音通话",
+  "version": "0.1.7",
+  "type": "module",
+  "main": "index.mjs",
+  "description": "OneBot controlled QQ private voice-call AVSDK bridge",
+  "author": "QQ Voice Call contributors",
+  "license": "GPL-3.0-only",
+  "keywords": ["napcat", "qq", "voice-call", "onebot"],
+  "napcat": {
+    "tags": ["工具", "机器人"],
+    "minVersion": "4.9.0",
+    "homepage": "https://github.com/NapNeko/NapCatQQ"
+  }
+}
