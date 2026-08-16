@@ -1,6 +1,8 @@
 # QQ Voice Call Bridge
 
-把 QQ 私聊语音接到 OneBot 和 AI 对话里的配套插件。
+一个帮助 OneBot 实现 QQ 私聊原生语音通话的开源配套项目。
+
+它把 NapCat 的 QQ 通话能力接入 OneBot，让 OneBot 可以接收 QQ 语音来电、按规则处理通话，并在宿主具备相应音频与模型服务时进行语音对话。
 
 可以把它理解成两个人一起接电话：**NapCat 端负责接起 QQ 电话、拿到音频并把电话状态传出来；OneBot 端负责决定要不要接听、把对方的话转成文字、生成回答，再把声音送回电话。**
 
@@ -81,7 +83,6 @@ NapCat 虚拟机 -> ws://<ONEBOT_HOST_IP>:6199/qq-voice-call -> OneBot 宿主机
 - [OneBot 端安装、配置和宿主接口](onebot-plugin/README.md)
 - [许可证](LICENSE)
 - [第三方来源与运行时说明](THIRD_PARTY_NOTICES.md)
-- [第一次发布清单](PUBLISH_CHECKLIST.md)
 
 ## 当前范围
 
@@ -89,13 +90,13 @@ NapCat 虚拟机 -> ws://<ONEBOT_HOST_IP>:6199/qq-voice-call -> OneBot 宿主机
 - 不承诺主动拨打、群语音、视频通话或并发多通电话。
 - NapCat、QQ、Electron 或 AVSDK 升级后，需要重新验证 Host 加载、接听信令和音频路由。
 
-## 许可证，用大白话说
+## 许可证
 
-本仓库使用 `GPL-3.0-only`。你可以使用、修改、分发，甚至用于收费项目；但如果你把修改版或衍生版分发给别人，通常需要继续使用 GPL、保留版权和许可证说明，并向接收者提供对应源代码。它不是“不能商用”的许可证。
+本仓库按 `GPL-3.0-only` 发布。你可以使用、修改和分发本项目，也可以将其用于收费项目；分发修改版或衍生作品时，应继续遵守 GPL-3.0 的条款，保留版权与许可证信息，并向接收者提供相应源代码。
 
-MIT 会更宽松，通常只要求保留版权和许可文本，也允许把修改后的代码放进闭源产品。但本项目的 NapCat 信令映射明确参考了 GPL 上游实现，所以当前版本不把整个仓库改成 MIT。许可证判断不是法律意见，分发前请按实际代码来源再确认。
+NapCat 端的信令映射参考了 GPL-3.0-only 上游实现，因此当前版本以 GPL-3.0-only 作为整个仓库的许可证。完整条款见 [LICENSE](LICENSE)，代码来源和未包含的第三方运行时见 [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)。
 
-上游来源见 [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)。QQ、NapCat、Electron、AVSDK、模型和音频运行时都不包含在本仓库中，使用者需要自行安装并遵守各自条款。
+QQ、NapCat、Electron、AVSDK、模型和音频运行时均不包含在本仓库中，使用者需要自行安装并遵守各自的软件和服务条款。
 
 ## 测试
 
