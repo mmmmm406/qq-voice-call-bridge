@@ -13,7 +13,7 @@ const bash = process.env.QQ_VOICE_CALL_TEST_BASH || "bash";
 const shellPath = (value) => value.replaceAll("\\", "/").replace(/^([A-Za-z]):/, (_, drive) => `/${drive.toLowerCase()}`);
 const quote = (value) => `'${value.replaceAll("'", "'\\''")}'`;
 
-/** 运行真实包装脚本的路径映射副本，QQ、解压器和上游入口均为隔离替身。 */
+/** 运行真实包装脚本的路径映射副本，Python、解压器和上游入口均为隔离替身。 */
 function fixture(t, { installed = false, fail = false } = {}) {
   fs.mkdirSync(temporaryRoot, { recursive: true });
   const root = fs.mkdtempSync(path.join(temporaryRoot, "docker-entrypoint-"));
@@ -32,16 +32,18 @@ function fixture(t, { installed = false, fail = false } = {}) {
   const config = path.join(app, "napcat/config/napcat.json");
   fs.writeFileSync(config, '{"synthetic":"retained"}');
   fs.writeFileSync(path.join(app, "NapCat.Shell.zip"), "synthetic archive");
-  fs.writeFileSync(path.join(plugin, "install-docker.cjs"), "synthetic installer");
+  fs.writeFileSync(path.join(plugin, "install-docker.py"), "synthetic installer");
   if (installed) fs.writeFileSync(path.join(app, "napcat/napcat.mjs"), "existing bundle");
   const log = (value) => `printf '%s\\n' '${value}' >> ${quote(shellPath(trace))}\n`;
   const executable = (filename, body) => fs.writeFileSync(filename, `#!/bin/bash\nset -euo pipefail\n${body}`, { mode: 0o755 });
   executable(path.join(bin, "unzip"), '[ "$6" = "config/*" ]\n' +
     'printf "%s" "unpacked bundle" > "$4/napcat.mjs"\n' + log("unpack"));
-  executable(path.join(qq, "qq"), '[ "${ELECTRON_RUN_AS_NODE:-}" = "1" ]\n' +
-    `[ "$1" = ${quote(shellPath(path.join(plugin, "install-docker.cjs")))} ]\n` +
+  executable(path.join(bin, "python3"),
+    `[ "$1" = ${quote(shellPath(path.join(plugin, "install-docker.py")))} ]\n` +
     `test -f ${quote(shellPath(path.join(app, "napcat/napcat.mjs")))}\n` +
     log("install") + (fail ? "exit 23\n" : ""));
+  // 安装器必须由 Python 执行；意外提前启动 QQ 会让本夹具失败。
+  executable(path.join(qq, "qq"), "exit 97\n");
   executable(path.join(app, "entrypoint.sh"), '[ -z "${ELECTRON_RUN_AS_NODE:-}" ]\n' + log("normal"));
 
   let mapped = source.replaceAll("/app", quote(shellPath(app)))

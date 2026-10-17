@@ -17,9 +17,9 @@
 
 全新容器还需要镜像自带的 `/app/NapCat.Shell.zip`。包装脚本在首次启动时先解压代码并保留配置目录，再执行插件安装；已有 NapCat 代码继续使用当前版本。
 
-示例 Compose 使用 `mlikiowa/napcat-docker` 的固定镜像摘要。可以通过 `NAPCAT_IMAGE` 指定自己的兼容镜像；路径布局和 Loader 结构需要符合安装器检查。
+示例 Compose 使用 `mlikiowa/napcat-docker` 的固定镜像摘要，其中自带 Python 3.10。可以通过 `NAPCAT_IMAGE` 指定自己的兼容镜像；镜像需要 Python 3.10 或兼容版本，路径布局和 Loader 结构需要符合安装器检查。
 
-本次验证覆盖合成目录下的首次安装、重复安装、发布包覆盖后的重新安装、配置保留、未知结构拒绝，白名单定位逻辑沿用已在 NapCat **4.18.38** 官方发布包上验证的实现。另用隔离的 Shell 替身检查首次解压、已有版本保留和安装失败时的启动顺序。真实容器启动和通话设备效果需要部署后验收。
+本次验证覆盖合成目录下的首次安装、重复安装、发布包覆盖后的重新安装、配置保留、未知结构拒绝，以及隔离 Shell 替身下的启动顺序和失败传播。另使用示例固定镜像、空账号目录和 `--network none` 实际启动：镜像自带 NapCat **4.18.37**，插件 **0.2.1** 安装成功，QQ/Electron 启动后 WebUI 返回 **HTTP 200**。同一安装实现也在 NapCat **4.18.38** 官方发布包上完成了隔离容器启动验证。账号在线、Host 激活和双向音频需在实际部署中分别验收。
 
 ## 新部署
 
@@ -34,7 +34,7 @@ docker compose -f docker/compose.yaml logs -f napcat
 安装成功时会出现类似信息：
 
 ```text
-[QQVoiceCall] Docker plugin v0.2.0 installed; enable it in NapCat plugin management
+[QQVoiceCall] Docker plugin v0.2.1 installed; enable it in NapCat plugin management
 ```
 
 打开 `http://127.0.0.1:6099`，按镜像原有方式登录 QQ，再到插件管理启用 `qq-voice-call`。安装器保留现有插件启用状态，首次启用由使用者操作。
@@ -59,14 +59,14 @@ services:
 如果原来已有自定义启动脚本，请在它完成 NapCat 发布包解压或更新之后、真正启动 QQ 之前加入：
 
 ```bash
-ELECTRON_RUN_AS_NODE=1 /opt/QQ/qq /opt/qq-voice-call/install-docker.cjs
+python3 /opt/qq-voice-call/install-docker.py
 ```
 
 让这一步失败时结束启动，避免在未完成 Host 分流的状态下运行 QQ。随后使用原来的 Compose 文件更新原 NapCat 服务。同一账号保持一个普通 QQ/NapCat 实例，避免并行部署造成会话冲突。
 
 ## 安装器修改的内容
 
-`napcat-plugin/install-docker.cjs` 使用 QQ/Electron 的 Node 模式执行，依赖 Node 内置模块：
+`napcat-plugin/install-docker.py` 使用镜像自带的 Python 3 执行，只依赖 Python 标准库：
 
 1. 校验 QQ 的 `main` 指向待适配的物理 Loader，并检查 AVSDK 与插件文件。
 2. 将只读挂载的插件部署到 `/app/napcat/plugins/qq-voice-call`。

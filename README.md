@@ -2,7 +2,7 @@
 
 为 Linux NapCat 提供 QQ 私聊原生语音来电能力，支持 Linux Shell 和 Docker 部署。插件使用独立 QQ/Electron AVSDK Host 处理原生通话，通过已鉴权的 WebSocket 向控制端提供来电状态和接听控制。
 
-当前版本：**0.2.0**。本次维护包含登录并发与生命周期修复、来电载荷兼容，以及 Docker 启动前自动安装。
+当前版本：**0.2.1**。包含登录并发与生命周期修复、来电载荷兼容，以及使用镜像自带 Python 的 Docker 启动前安装。
 
 ## 从这里开始
 
@@ -70,13 +70,14 @@ AVSDK 登录命令的最小间隔为 60 秒，首次尝试、失败重试和桥�
 
 本次行为回归使用合成身份、虚拟时钟和隔离文件夹，覆盖重复回调、长耗时登录、桥重连、Host 退出交接和 Docker 安装幂等。白名单定位逻辑沿用本地已在 NapCat 4.18.38 官方发布包上验证的实现。
 
-需要 Node.js 22 或兼容版本及 Bash。Windows 运行 Docker 启动脚本测试时，用 `QQ_VOICE_CALL_TEST_BASH` 环境变量指定 Git for Windows 的 `bin/bash.exe`。
+需要 Python 3.10、Node.js 22 或兼容版本及 Bash。Windows 运行 Docker 启动脚本测试时，用 `QQ_VOICE_CALL_TEST_BASH` 环境变量指定 Git for Windows 的 `bin/bash.exe`。
 
 ```bash
-node --test napcat-plugin/tests/login.test.mjs napcat-plugin/tests/host-process.test.mjs napcat-plugin/tests/install-docker.test.cjs napcat-plugin/tests/protocol.test.mjs napcat-plugin/tests/invite.test.mjs napcat-plugin/tests/docker-entrypoint.test.cjs
+python3 -B napcat-plugin/tests/test_install_docker.py
+node --test napcat-plugin/tests/login.test.mjs napcat-plugin/tests/host-process.test.mjs napcat-plugin/tests/protocol.test.mjs napcat-plugin/tests/invite.test.mjs napcat-plugin/tests/docker-entrypoint.test.cjs
 ```
 
-容器内真实 QQ/Electron 启动、长期在线和双向通话音频仍需在实际部署中验收。升级 QQ、NapCat 或镜像后，需要重新检查 Host 加载、来电、接听和音频。
+固定示例镜像已用空账号目录和隔离网络实际启动，插件 0.2.1 安装成功，QQ/Electron 启动后 WebUI 返回 HTTP 200。实际账号在线、Host 激活和双向通话音频需在部署中分别验收。升级 QQ、NapCat 或镜像后，需要重新检查 Host 加载、来电、接听和音频。
 
 ## 许可证与来源
 

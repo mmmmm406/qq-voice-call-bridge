@@ -20,7 +20,7 @@ NapCat 插件作为 WebSocket 客户端连接控制端，默认路径 `/qq-voice
 {
   "type": "hello",
   "protocolVersion": 1,
-  "pluginVersion": "0.2.0",
+  "pluginVersion": "0.2.1",
   "capabilities": [],
   "selfId": "123456789",
   "platform": "linux",

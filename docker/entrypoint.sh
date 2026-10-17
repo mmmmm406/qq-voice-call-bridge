@@ -10,9 +10,8 @@ if [ ! -f /app/napcat/napcat.mjs ]; then
   unzip -qo /app/NapCat.Shell.zip -d /app/napcat -x 'config/*'
 fi
 
-# 使用镜像自带的 QQ/Electron Node 模式，不加载 QQ 客户端 main。
-# 变量只作用于安装命令，后面的正常 QQ 启动沿用镜像原有环境。
-ELECTRON_RUN_AS_NODE=1 /opt/QQ/qq /opt/qq-voice-call/install-docker.cjs
+# 使用基础镜像自带的 Python 3 完成文件部署，QQ/Electron 留给原入口启动。
+python3 /opt/qq-voice-call/install-docker.py
 
 # 账号登录、权限及运行目录继续由上游镜像的启动脚本处理。
 exec bash /app/entrypoint.sh "$@"
