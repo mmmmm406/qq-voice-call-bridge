@@ -1,7 +1,7 @@
 {
   "name": "qq-voice-call",
   "plugin": "QQ语音通话",
-  "version": "0.2.1",
+  "version": "0.2.2",
   "type": "module",
   "main": "index.mjs",
   "description": "Linux/Docker NapCat QQ 私聊原生语音来电与 WebSocket 控制桥",

@@ -48,7 +48,7 @@ const {
   sanitizeStaticArtifactReport,
 } = staticArtifactModule;
 
-const PLUGIN_VERSION = "0.2.0";
+const PLUGIN_VERSION = "0.2.2";
 // 从登录命令实际发出时计时，首次、失败重试和桥重连使用同一最小间隔。
 const AVSDK_LOGIN_MIN_INTERVAL_MS = 60000;
 let lastAvsdkLoginAt = Number.NEGATIVE_INFINITY;
@@ -57,7 +57,7 @@ let avsdkLoginInFlight = null;
 const STATIC_AVSDK_PLUGIN_PATH = "/opt/QQ/resources/app/avsdk/libAVSDKPlugin.so";
 let context = null;
 let logger = null;
-let pluginConfig = {
+const DEFAULT_PLUGIN_CONFIG = {
   serverUrl: "",
   token: "",
   voicePath: "/qq-voice-call",
@@ -72,6 +72,9 @@ let pluginConfig = {
     userDataDir: "",
   },
 };
+let pluginConfig = { ...DEFAULT_PLUGIN_CONFIG, avHost: { ...DEFAULT_PLUGIN_CONFIG.avHost } };
+// 保存与运行配置分开：编辑表单只落盘，重新启用插件时统一生效。
+let savedPluginConfig = pluginConfig;
 let bridgeSettings = null;
 let bridgeSocket = null;
 let reconnectTimer = null;
@@ -126,7 +129,6 @@ function idleAVSDK() {
     hostDiagnostics: null,
     rendererDiagnostics: null,
     loginPosted: false,
-    loginSuppressed: 0, // 等待重登或登录在途时合并的重复回调数。
     lastLoginAt: null,
     lastLoginResult: null,
     lastOutputCommand: null,
@@ -415,23 +417,89 @@ function stopHostProcess() {
   });
 }
 
+/** 接受 NapCat 的平面表单和原有嵌套 avHost 配置；校验后才允许持久化。 */
+function normalizePluginConfig(incoming, previous = DEFAULT_PLUGIN_CONFIG) {
+  if (!incoming || typeof incoming !== "object" || Array.isArray(incoming)) {
+    throw new Error("插件配置必须是对象");
+  }
+  if (incoming.avHost !== undefined && (
+    !incoming.avHost || typeof incoming.avHost !== "object" || Array.isArray(incoming.avHost)
+  )) throw new Error("avHost 配置必须是对象");
+  const next = {
+    ...DEFAULT_PLUGIN_CONFIG,
+    ...previous,
+    avHost: { ...DEFAULT_PLUGIN_CONFIG.avHost, ...previous.avHost },
+  };
+  for (const key of ["serverUrl", "token", "voicePath", "reconnectIntervalMs"]) {
+    if (Object.hasOwn(incoming, key)) next[key] = incoming[key];
+  }
+  for (const key of Object.keys(DEFAULT_PLUGIN_CONFIG.avHost)) {
+    if (Object.hasOwn(incoming.avHost ?? {}, key)) next.avHost[key] = incoming.avHost[key];
+    // NapCat 4.18.x 按 config[field.key] 读写，点号键需在此还原为嵌套配置。
+    if (Object.hasOwn(incoming, `avHost.${key}`)) next.avHost[key] = incoming[`avHost.${key}`];
+  }
+  const text = (value, name) => {
+    if (typeof value !== "string") throw new Error(`${name} 必须是文本`);
+    return value.trim();
+  };
+  const integer = (value, minimum, maximum, name) => {
+    const parsed = typeof value === "number" || (typeof value === "string" && value.trim())
+      ? Number(value) : Number.NaN;
+    if (!Number.isInteger(parsed) || parsed < minimum || parsed > maximum) {
+      throw new Error(`${name} 必须是 ${minimum} 到 ${maximum} 的整数`);
+    }
+    return parsed;
+  };
+  next.serverUrl = text(next.serverUrl, "控制端 WebSocket 地址");
+  if (next.serverUrl) {
+    let url;
+    try { url = new URL(next.serverUrl); } catch { throw new Error("控制端地址必须是有效的 ws:// 或 wss:// 地址"); }
+    if (!["ws:", "wss:"].includes(url.protocol)) throw new Error("控制端地址必须使用 ws:// 或 wss://");
+    if (url.username || url.password) throw new Error("请在桥接令牌字段填写凭据，地址中只填写主机、端口和路径");
+  }
+  const token = text(next.token, "桥接令牌");
+  if (incoming.clearToken !== undefined && typeof incoming.clearToken !== "boolean") {
+    throw new Error("恢复使用 NapCat 令牌必须是开关值");
+  }
+  next.token = incoming.clearToken ? "" : token || previous.token;
+  next.voicePath = text(next.voicePath, "电话桥路径");
+  if (!next.voicePath || /[?#\s]/.test(next.voicePath)) throw new Error("电话桥路径不能为空，也不能包含空白、? 或 #");
+  if (!next.voicePath.startsWith("/")) next.voicePath = `/${next.voicePath}`;
+  next.reconnectIntervalMs = integer(next.reconnectIntervalMs, 1000, 60000, "重连间隔（毫秒）");
+  for (const key of ["qqExecutable", "avsdkPath", "loaderPath", "controlHost", "userDataDir"]) {
+    next.avHost[key] = text(next.avHost[key], `avHost.${key}`);
+  }
+  if (!next.avHost.qqExecutable || !next.avHost.avsdkPath) throw new Error("QQ 可执行文件和 AVSDK 动态库路径不能为空");
+  if (next.avHost.controlHost === "localhost") next.avHost.controlHost = "127.0.0.1";
+  if (!["127.0.0.1", "::1"].includes(next.avHost.controlHost)) throw new Error("Host 地址只允许回环地址 127.0.0.1 或 ::1");
+  next.avHost.controlPort = integer(next.avHost.controlPort, 1, 65535, "插件控制端口");
+  next.avHost.hostPort = integer(next.avHost.hostPort, 1, 65535, "Host 页面端口");
+  if (next.avHost.controlPort === next.avHost.hostPort) throw new Error("插件控制端口和 Host 页面端口必须不同");
+  return next;
+}
+
 function loadPluginConfig(ctx) {
+  pluginConfig = normalizePluginConfig({});
+  savedPluginConfig = pluginConfig;
   if (!fs.existsSync(ctx.configPath)) return;
   try {
     const saved = JSON.parse(fs.readFileSync(ctx.configPath, "utf8"));
-    if (saved && typeof saved === "object" && !Array.isArray(saved)) {
-      pluginConfig = { ...pluginConfig, ...saved };
-    }
+    pluginConfig = normalizePluginConfig(saved);
+    savedPluginConfig = pluginConfig;
   } catch (error) {
     logger?.warn(`[QQVoiceCall] plugin config load failed: ${error?.message ?? error}`);
   }
 }
 
-function persistPluginConfig(ctx) {
+function persistPluginConfig(ctx, config) {
   fs.mkdirSync(path.dirname(ctx.configPath), { recursive: true });
   const temporaryPath = `${ctx.configPath}.tmp`;
-  fs.writeFileSync(temporaryPath, JSON.stringify(pluginConfig, null, 2), "utf8");
-  fs.renameSync(temporaryPath, ctx.configPath);
+  try {
+    fs.writeFileSync(temporaryPath, JSON.stringify(config, null, 2), "utf8");
+    fs.renameSync(temporaryPath, ctx.configPath);
+  } finally {
+    if (fs.existsSync(temporaryPath)) fs.unlinkSync(temporaryPath);
+  }
 }
 
 function sendBridge(payload) {
@@ -1519,6 +1587,15 @@ async function handleAVSDKOutput(_event, incoming) {
   state.avsdk.outputCount += 1;
   const commandKey = String(command);
   state.avsdk.commandCounts[commandKey] = (state.avsdk.commandCounts[commandKey] ?? 0) + 1;
+
+  // QQ 原生 QRTCServiceInterfaceWrapper 用 20050/120043 发送 LogSend/AlertMessage。
+  // 它们是日志和提示通知，不表示登录失效；收到这些输出不能重新提交登录。
+  if (command === 20050 || command === 120043) {
+    // 保留次数与当前错误；原生日志不能把登录或通话故障改报为正常。
+    sendStatus();
+    return;
+  }
+
   logger?.info(
     `[QQVoiceCall] AVSDK output received: cmd=${command} ` +
     `value=${summarizeKernelArg(rawValue)}`,
@@ -1618,12 +1695,6 @@ async function handleAVSDKOutput(_event, incoming) {
       state.call.phase = "ringing";
     }
     logger?.info(`[QQVoiceCall] enter-room result: code=${String(resultCode)}`);
-  } else if (command === 20050 || command === 120043) {
-    if (state.avsdk.loginPosted) {
-      scheduleLogin(100);
-    } else {
-      state.avsdk.loginSuppressed += 1;
-    }
   }
   state.lastError = null;
   sendStatus();
@@ -1815,7 +1886,7 @@ async function invokeAVSDK(command, params) {
 function scheduleLogin(delayMs = 500) {
   if (!state.active || loginTimer) return;
   const avsdk = state.avsdk;
-  // 先关闭回调闸门，保留一个到期任务；持续回调不会取消或提前这个任务。
+  // 登录由运行时激活或命令投递失败调度；同一运行时只保留一个待执行任务。
   avsdk.loginPosted = false;
   const waitMs = Math.max(delayMs, AVSDK_LOGIN_MIN_INTERVAL_MS - (Date.now() - lastAvsdkLoginAt));
   loginTimer = setTimeout(() => {
@@ -2007,25 +2078,33 @@ export const plugin_cleanup = async () => {
   logger = null;
 };
 
-export const plugin_get_config = async () => ({ ...pluginConfig, token: "" });
+export const plugin_get_config = async () => ({
+  ...savedPluginConfig,
+  avHost: { ...savedPluginConfig.avHost },
+  token: "", // 配置窗口只接受新令牌，读取时始终隐藏已保存的凭据。
+  clearToken: false,
+  ...Object.fromEntries(Object.entries(savedPluginConfig.avHost).map(([key, value]) => [`avHost.${key}`, value])),
+});
 
 export const plugin_set_config = async (ctx, incoming) => {
-  pluginConfig = {
-    ...pluginConfig,
-    serverUrl: String(incoming?.serverUrl ?? "").trim(),
-    token: String(incoming?.token ?? "").trim() || pluginConfig.token,
-    voicePath: String(incoming?.voicePath ?? "/qq-voice-call").trim(),
-    reconnectIntervalMs: Number(incoming?.reconnectIntervalMs ?? 5000),
-  };
-  persistPluginConfig(ctx);
-  if (bridgeSocket) {
-    const socket = bridgeSocket;
-    bridgeSocket = null;
-    socket.removeAllListeners();
-    socket.close();
-  }
-  bridgeSettings = null;
-  connectBridge();
+  const next = normalizePluginConfig(incoming, savedPluginConfig);
+  persistPluginConfig(ctx, next);
+  savedPluginConfig = next;
 };
 
-export const plugin_config_ui = [];
+export const plugin_config_ui = [
+  { key: "connectionHelp", type: "text", label: "连接控制端", default: "保存后重新启用插件或重启 NapCat 生效。地址留空时，自动复用 NapCat 已启用的反向 WebSocket 连接。" },
+  { key: "serverUrl", type: "string", label: "控制端 WebSocket 地址", default: DEFAULT_PLUGIN_CONFIG.serverUrl, placeholder: "留空自动读取；例如 ws://host.docker.internal:6199/ws", description: "Docker 访问本机控制端可使用 host.docker.internal；电话桥路径由下一项单独指定。" },
+  { key: "voicePath", type: "string", label: "电话桥路径", default: DEFAULT_PLUGIN_CONFIG.voicePath, description: "必须与控制端注册的路径一致。" },
+  { key: "token", type: "string", label: "新的桥接令牌", default: "", description: "留空保留已有令牌；首次未设置时复用 NapCat 反向 WebSocket 的 Token。" },
+  { key: "clearToken", type: "boolean", label: "恢复使用 NapCat 令牌", default: false, description: "保存时清除单独设置的桥接令牌，重新使用 NapCat 连接的 Token；保存后此开关自动复位。" },
+  { key: "reconnectIntervalMs", type: "number", label: "断线重连间隔（毫秒）", default: DEFAULT_PLUGIN_CONFIG.reconnectIntervalMs, description: "范围 1000–60000，只控制桥接 WebSocket 重连间隔。" },
+  { key: "hostHelp", type: "text", label: "QQ 通话 Host", default: "标准 Docker 镜像可沿用默认值。这里的文件路径均指容器内路径；修改后重新启用插件或重启 NapCat 生效。" },
+  { key: "avHost.qqExecutable", type: "string", label: "QQ 可执行文件", default: DEFAULT_PLUGIN_CONFIG.avHost.qqExecutable, description: "用于承载通话的 QQ/Electron 程序。" },
+  { key: "avHost.avsdkPath", type: "string", label: "AVSDK 动态库", default: DEFAULT_PLUGIN_CONFIG.avHost.avsdkPath, description: "当前 QQ 安装中 libAVSDKPlugin.so 的完整路径。" },
+  { key: "avHost.loaderPath", type: "string", label: "NapCat 加载入口", default: DEFAULT_PLUGIN_CONFIG.avHost.loaderPath, placeholder: "留空自动定位 loadNapCat.js", description: "适配自定义 QQ 或 NapCat 安装目录时填写。" },
+  { key: "avHost.controlHost", type: "select", label: "Host 回环地址", default: DEFAULT_PLUGIN_CONFIG.avHost.controlHost, options: [{ label: "IPv4 · 127.0.0.1", value: "127.0.0.1" }, { label: "IPv6 · ::1", value: "::1" }], description: "插件与通话 Host 使用同一回环地址通信。" },
+  { key: "avHost.controlPort", type: "number", label: "插件控制端口", default: DEFAULT_PLUGIN_CONFIG.avHost.controlPort, description: "容器内插件接收 Host 回调的端口，范围 1–65535。" },
+  { key: "avHost.hostPort", type: "number", label: "Host 页面端口", default: DEFAULT_PLUGIN_CONFIG.avHost.hostPort, description: "容器内 Host 提供页面与控制服务的端口，范围 1–65535，须与插件控制端口不同。" },
+  { key: "avHost.userDataDir", type: "string", label: "Host 数据目录", default: DEFAULT_PLUGIN_CONFIG.avHost.userDataDir, placeholder: "留空使用插件持久目录下的 av-host-profile", description: "保存通话 Host 的独立运行资料；在 Docker 中使用配置卷内目录可随容器重建保留。" },
+];

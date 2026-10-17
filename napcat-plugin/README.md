@@ -80,7 +80,11 @@ QQ 电话：ws://<ONEBOT_HOST_IP>:6199/qq-voice-call
 
 ### 配置保存位置
 
-插件配置由 NapCat 插件宿主管理，公开仓库不规定你的 NapCat 配置文件绝对路径。能看到插件设置界面的版本，直接在插件管理页面保存；没有设置界面的版本，使用 NapCat 为该插件生成的本地配置文件，不要修改仓库里的示例文件。
+0.2.2 起提供插件配置页：在 NapCat 插件管理中打开 `qq-voice-call` 的设置，即可编辑连接字段和下面的 Host 字段。兼容 NapCat 4.18.x 的点号键表单以及原有嵌套 `avHost` 配置。
+
+保存时校验 WebSocket 协议、重连间隔、端口范围与端口冲突，再原子写入 NapCat 管理的插件配置文件。**保存后重新启用插件或重启 NapCat 生效**；编辑和保存配置时，当前连接与通话继续使用本次启动时的配置。
+
+令牌读取时显示为空，保存空值保留已有令牌。勾选“恢复使用 NapCat 令牌”并保存，会清除插件单独设置的令牌；下次启用时从普通反向 WS 继承 Token，该开关保存后自动复位。控制桥仍要求有效 Token。
 
 ## 第三步：检查 AVSDK Host 路径
 
@@ -101,8 +105,11 @@ AVSDK 文件：/opt/QQ/resources/app/avsdk/libAVSDKPlugin.so
 | avHost.avsdkPath | libAVSDKPlugin.so 的绝对路径 |
 | avHost.loaderPath | 缺省先查找 Shell 入口，再查找 QQ 安装目录的 resources/app/loadNapCat.js；自定义入口时填写 |
 | avHost.controlHost | 仅允许 127.0.0.1 或 ::1 |
-| avHost.controlPort | Host 控制端口，默认 6110 |
+| avHost.controlPort | 插件接收 Host 回调的端口，默认 6110 |
 | avHost.hostPort | Host 页面端口，默认 6111 |
+| avHost.userDataDir | Host 独立数据目录；留空使用插件持久目录下的 av-host-profile |
+
+两个 Host 端口分别承载插件回调与 Host 页面/控制服务，必须不同，只监听回环地址；它们不需要在 NapCat 网络设置中另建反向 WS，也不需要发布为 Docker 宿主机端口。Docker 中填写的路径均指容器内路径。
 
 这些是本机路径和本机端口，不要照抄其他人的路径，也不要提交到公开仓库。controlHost 不是 OneBot 地址，不能填虚拟机宿主机 IP。
 
@@ -188,6 +195,14 @@ NapCat 虚拟机 -> ws://<ONEBOT_HOST_IP>:6199/qq-voice-call -> OneBot 宿主机
 5. 最后再检查 QQ/AVSDK 路径、Electron Host 和本机音频设备。
 
 NapCat、QQ、Electron、launcher 或 AVSDK 升级后，必须重新验证 Host 加载、接听信令和音频路由。静态 Node 测试不能替代真实 QQ 电话复测。
+
+## 登录状态与日志
+
+0.2.2 修正了 AVSDK 输出通知的语义。对 QQ Linux `3.2.34-53644` 的原生 `libAVSDKPlugin.so` 静态核对表明，命令 `20050` 来自 `QRTCServiceInterfaceWrapper::LogSend`，`120043` 来自 `QRTCServiceInterfaceWrapper::AlertMessage`。它们是日志和提示，不能作为登录失效的依据。
+
+此前的 0.2.0/0.2.1 仍会因这些通知安排下一次初始化，只是用 60 秒间隔压低频率。0.2.2 从调度入口移除了这个触发条件，并保留通知计数与当前错误。每秒 10 次通知、持续两分钟的合成回放中，登录调用由 3 次降为首次初始化的 1 次。
+
+运行时激活与登录命令投递失败仍按既有规则安排初始化，60 秒最小间隔、单个在途请求、旧 Host 清理交接继续生效。AVSDK 初始化与 QQ 主账号登录属于不同环节；重复初始化缺陷的修复不能证明腾讯风险告警的原因，长期在线与双向音频需分别验收。
 
 ## 测试
 

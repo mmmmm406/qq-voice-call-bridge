@@ -1,7 +1,11 @@
 services:
   napcat:
-    # QQ 运行环境固定到镜像摘要；可通过 NAPCAT_IMAGE 使用自己的兼容镜像。
-    image: ${NAPCAT_IMAGE:-mlikiowa/napcat-docker@sha256:f611790ecffa23c3c182017d5cf68179dc24612403608cd835ad13d79642f1bd}
+    # 从固定 QQ 基础镜像构建 AVSDK 运行依赖；NAPCAT_IMAGE 可替换基础镜像。
+    image: qq-voice-call-napcat:local
+    build:
+      context: .
+      args:
+        NAPCAT_IMAGE: ${NAPCAT_IMAGE:-mlikiowa/napcat-docker@sha256:f611790ecffa23c3c182017d5cf68179dc24612403608cd835ad13d79642f1bd}
     init: true
     restart: "no"
     entrypoint: ["bash", "/opt/qq-voice-call-docker/entrypoint.sh"]

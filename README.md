@@ -2,7 +2,7 @@
 
 为 Linux NapCat 提供 QQ 私聊原生语音来电能力，支持 Linux Shell 和 Docker 部署。插件使用独立 QQ/Electron AVSDK Host 处理原生通话，通过已鉴权的 WebSocket 向控制端提供来电状态和接听控制。
 
-当前版本：**0.2.1**。包含登录并发与生命周期修复、来电载荷兼容，以及使用镜像自带 Python 的 Docker 启动前安装。
+当前版本：**0.2.2**。修正 AVSDK 日志通知误触发重新初始化的问题，提供 NapCat 插件配置页，并在 Docker 构建时补齐 AVSDK 原生依赖。
 
 ## 从这里开始
 
@@ -23,12 +23,12 @@
 ```bash
 git clone https://github.com/mmmmm406/qq-voice-call-bridge.git
 cd qq-voice-call-bridge
-docker compose -f docker/compose.yaml up -d
+docker compose -f docker/compose.yaml up -d --build
 ```
 
 启动包装脚本会在 QQ 启动前部署插件、补上插件白名单并适配物理 Loader，然后交给镜像原有入口启动 NapCat。源码以只读方式挂载，每次创建或启动容器都会重新确认安装状态。
 
-打开 NapCat WebUI，在插件管理中启用 **qq-voice-call**，再配置到控制端的反向 WebSocket。示例仅将 WebUI 发布到本机 `127.0.0.1:6099`。
+打开 NapCat WebUI，在插件管理中启用 **qq-voice-call**，再配置到控制端的反向 WebSocket。插件设置页可调整桥接连接、令牌、QQ/AVSDK 路径及 Host 端口；保存后重新启用插件或重启 NapCat 生效。示例仅将 WebUI 发布到本机 `127.0.0.1:6099`。
 
 Docker 安装器适配 `/app/napcat` 与 `/opt/QQ` 的标准 Linux 布局；遇到未知 Loader、白名单或残缺的备份会结束本次启动，错误会出现在容器日志中。镜像与验证范围见 [Docker 说明](docker/README.md)。
 
@@ -62,7 +62,9 @@ Linux Shell 使用支持 `NAPCAT_BOOTMAIN` 的 launcher；插件不可见或使�
 
 ## 登录与进程生命周期
 
-`0.2.0` 合并了重复回调的登录任务，在同一插件生命周期内共享在途登录请求，并在重新激活前等待旧 Host 清理完成。旧进程迟到的错误和退出事件按进程身份过滤。
+`0.2.2` 修正了输出命令的语义：`20050` 来自原生 `LogSend`，`120043` 来自原生 `AlertMessage`，两者都不再触发 AVSDK 登录，也不清除现有错误。模拟每秒 10 次通知、持续两分钟时，登录调用由 `0.2.1` 的 3 次降为首次初始化的 1 次。
+
+插件继续在同一生命周期内共享在途登录请求，并在重新激活前等待旧 Host 清理完成。旧进程迟到的错误和退出事件按进程身份过滤。
 
 AVSDK 登录命令的最小间隔为 60 秒，首次尝试、失败重试和桥重连均遵守；该间隔是保护策略。AVSDK 初始化与 QQ 主账号登录属于不同环节，本项目不保证账号在线时长，也不能据此判断腾讯账号风控原因。
 
@@ -74,10 +76,10 @@ AVSDK 登录命令的最小间隔为 60 秒，首次尝试、失败重试和桥�
 
 ```bash
 python3 -B napcat-plugin/tests/test_install_docker.py
-node --test napcat-plugin/tests/login.test.mjs napcat-plugin/tests/host-process.test.mjs napcat-plugin/tests/protocol.test.mjs napcat-plugin/tests/invite.test.mjs napcat-plugin/tests/docker-entrypoint.test.cjs
+node --test napcat-plugin/tests/login.test.mjs napcat-plugin/tests/config.test.mjs napcat-plugin/tests/host-process.test.mjs napcat-plugin/tests/protocol.test.mjs napcat-plugin/tests/invite.test.mjs napcat-plugin/tests/docker-entrypoint.test.cjs
 ```
 
-固定示例镜像已用空账号目录和隔离网络实际启动，插件 0.2.1 安装成功，QQ/Electron 启动后 WebUI 返回 HTTP 200。实际账号在线、Host 激活和双向通话音频需在部署中分别验收。升级 QQ、NapCat 或镜像后，需要重新检查 Host 加载、来电、接听和音频。
+0.2.2 已通过 37 项 Node 回归、4 项 Python 安装器回归、Compose 配置检查和独立镜像构建；固定基础镜像的 AVSDK 缺失动态库由 3 项降为 0 项。此前 0.2.1 已用空账号目录和隔离网络验证容器启动，QQ/Electron 启动后 WebUI 返回 HTTP 200。实际账号在线、Host 激活和双向通话音频需在部署中分别验收。升级 QQ、NapCat 或镜像后，需要重新检查 Host 加载、来电、接听和音频。
 
 ## 许可证与来源
 

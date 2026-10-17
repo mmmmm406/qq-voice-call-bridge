@@ -64,7 +64,7 @@ function createRuntime({ costMs = 0, fail = false, stopCostMs = 0, loaderPaths =
     createAVSDKHost = startHostStub;
     stopHostProcess = stopHostStub;
     ({ start: activateRuntime, stop: cleanupAVSDKResources,
-       emit: (cmd) => handleAVSDKOutput(null, { cmd }), snapshot: publicStatus,
+       emit: (cmd, value) => handleAVSDKOutput(null, { cmd, value }), snapshot: publicStatus,
        hostSettings: normalizeHostSettings });
   `, sandbox);
   return {
@@ -88,36 +88,37 @@ function createRuntime({ costMs = 0, fail = false, stopCostMs = 0, loaderPaths =
   };
 }
 
-test("每秒 10 次重登回调在不同登录耗时下均至少间隔 60 秒", async () => {
+test("每秒 10 次原生日志和提示通知在不同登录耗时下均只登录一次", async () => {
   for (const costMs of [0, 50, 150, 400]) {
     const runtime = createRuntime({ costMs });
     await runtime.start();
     await runtime.advance(500);
     for (let tick = 0; tick < 1200; tick += 1) {
       await runtime.advance(100);
-      await runtime.emit(tick % 2 ? 120043 : 20050);
+      await runtime.emit(tick % 2 ? 120043 : 20050, ["synthetic native notification"]);
     }
     await runtime.advance(costMs);
-    assert.deepEqual(runtime.calls, [500, 60500, 120500]);
+    assert.deepEqual(runtime.calls, [500]);
     assert.equal(runtime.maxInFlight, 1);
     const { avsdk } = runtime.snapshot();
-    assert.ok(avsdk.loginSuppressed > 1000);
-    assert.equal(avsdk.lastLoginAt, new Date(120500).toISOString());
+    assert.equal(avsdk.commandCounts["20050"], 600);
+    assert.equal(avsdk.commandCounts["120043"], 600);
+    assert.equal(avsdk.loginPosted, true);
+    assert.equal(avsdk.lastLoginAt, new Date(500).toISOString());
     assert.equal(avsdk.lastLoginResult, "object{posted}");
     await runtime.stop("test_complete");
   }
 });
 
-test("单次回调保留到期任务，回调停止后仍能重登", async () => {
+test("单次日志和提示通知保留登录状态，冷却到期后也不会重登", async () => {
   const runtime = createRuntime();
   await runtime.start();
   await runtime.advance(500);
   await runtime.emit(20050);
-  assert.equal(runtime.snapshot().avsdk.loginPosted, false);
-  await runtime.advance(59999);
-  assert.equal(runtime.calls.length, 1);
-  await runtime.advance(1);
-  assert.deepEqual(runtime.calls, [500, 60500]);
+  await runtime.emit(120043);
+  assert.equal(runtime.snapshot().avsdk.loginPosted, true);
+  await runtime.advance(180000);
+  assert.deepEqual(runtime.calls, [500]);
   assert.equal(runtime.snapshot().avsdk.loginPosted, true);
   await runtime.stop("test_complete");
 });
@@ -127,12 +128,14 @@ test("首次登录失败后的自动重试同样遵守 60 秒间隔", async () =
   await runtime.start();
   await runtime.advance(180500);
   assert.deepEqual(runtime.calls, [500, 60500, 120500, 180500]);
+  await runtime.emit(20050, ["synthetic log after login failure"]);
+  await runtime.emit(120043, ["synthetic alert after login failure"]);
   assert.match(runtime.snapshot().lastError, /synthetic login failure/);
   assert.equal(runtime.snapshot().avsdk.lastLoginResult, null);
   await runtime.stop("test_complete");
 });
 
-test("登录耗时超过冷却窗口时也只允许一个命令在途", async () => {
+test("登录耗时超过冷却窗口时，原生通知也不会创建第二个登录请求", async () => {
   const runtime = createRuntime({ costMs: 65000 });
   await runtime.start();
   for (let tick = 0; tick < 655; tick += 1) {
@@ -140,15 +143,15 @@ test("登录耗时超过冷却窗口时也只允许一个命令在途", async ()
     await runtime.emit(120043);
   }
   assert.deepEqual(runtime.calls, [500]);
-  await runtime.advance(100);
-  assert.deepEqual(runtime.calls, [500, 65600]);
+  await runtime.advance(65100);
+  assert.deepEqual(runtime.calls, [500]);
   assert.equal(runtime.maxInFlight, 1);
   await runtime.stop("test_complete");
   await runtime.advance(65000);
   assert.equal(runtime.snapshot().avsdk.loginPosted, false);
 });
 
-test("清理取消待执行任务，重新激活仍保留最近登录的冷却", async () => {
+test("桥重连重新激活仍保留最近登录的冷却", async () => {
   const runtime = createRuntime();
   await runtime.start();
   await runtime.advance(500);
@@ -164,6 +167,16 @@ test("清理取消待执行任务，重新激活仍保留最近登录的冷却",
   await runtime.stop("test_complete");
   await runtime.advance(120000);
   assert.equal(runtime.calls.length, 2);
+});
+
+test("清理取消尚未提交的首次登录任务", async () => {
+  const runtime = createRuntime();
+  await runtime.start();
+  await runtime.advance(499);
+  await runtime.stop("bridge_disconnected");
+  await runtime.advance(120000);
+  assert.deepEqual(runtime.calls, []);
+  assert.equal(runtime.snapshot().active, false);
 });
 
 test("桥重连期间上一代登录仍在途时，新一代等待其结束", async () => {

@@ -63,7 +63,7 @@ NapCat 插件作为 WebSocket 客户端连接控制端，默认路径 `/qq-voice
 
 - `data.active`：运行时是否激活。
 - `data.avsdk.hostReady`、`listenerRegistered`、`loginPosted`：Host、监听与登录命令提交状态。
-- `data.avsdk.lastLoginAt`、`lastLoginResult`、`loginSuppressed`：登录调用时间、返回结构摘要和合并的重复回调次数。
+- `data.avsdk.lastLoginAt`、`lastLoginResult`：AVSDK 初始化调用时间和返回结构摘要。0.2.2 起，原生日志/提示通知 `20050`、`120043` 只累计到 `commandCounts`，不再触发初始化；`loginSuppressed` 随原有通知重登逻辑一起移除。
 - `data.call.phase`：例如 `idle`、`ringing`、`accepted`、`connected`、`ended`、`error`。
 - `data.call.callerUid`、`callerUin`、`callerName`：来电身份，部分字段可能尚未解析。
 
