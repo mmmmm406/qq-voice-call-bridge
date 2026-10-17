@@ -403,3 +403,89 @@ export function shouldAcceptCaller(callerUin, runtimeConfig) {
   }
   return { accept: true, reason: "allowed" };
 }
+
+
+// 兼容不同 QQ/AVSDK 版本的 UID 包装与来电载荷；保留接听参数位置。
+const CALLER_UID_KEYS = [
+  "callerUid",
+  "caller_uid",
+  "peerUid",
+  "peer_uid",
+  "fromUid",
+  "from_uid",
+  "uid",
+  "userId",
+  "user_id",
+  "uin",
+];
+
+const INVITE_WRAPPER_KEYS = ["invite", "params", "value", "data", "payload", "args"];
+
+function scalarUid(value) {
+  if (typeof value === "string") {
+    const normalized = value.trim();
+    return normalized && normalized !== "0" ? normalized : null;
+  }
+  if (typeof value === "number" && Number.isSafeInteger(value) && value > 0) return String(value);
+  return null;
+}
+
+
+export function extractCallerUid(value, depth = 0, seen = new WeakSet()) {
+  const direct = scalarUid(value);
+  if (direct || value === null || value === undefined || depth > 4) return direct;
+  if (typeof value !== "object" || seen.has(value)) return null;
+  seen.add(value);
+  if (Array.isArray(value)) {
+    const candidate = extractCallerUid(value[1], depth + 1, seen);
+    if (candidate || value.length >= 12) return candidate;
+    return extractCallerUid(value[0], depth + 1, seen);
+  }
+  for (const key of CALLER_UID_KEYS) {
+    const candidate = scalarUid(value[key]);
+    if (candidate) return candidate;
+  }
+  for (const key of INVITE_WRAPPER_KEYS) {
+    const candidate = extractCallerUid(value[key], depth + 1, seen);
+    if (candidate) return candidate;
+  }
+  return null;
+}
+
+
+function findInviteArray(value, depth = 0, seen = new WeakSet()) {
+  if (depth > 4 || value === null || value === undefined) return null;
+  if (Array.isArray(value)) {
+    if (value.length >= 12) return value;
+    for (const item of value) {
+      const nested = findInviteArray(item, depth + 1, seen);
+      if (nested) return nested;
+    }
+    return null;
+  }
+  if (typeof value !== "object" || seen.has(value)) return null;
+  seen.add(value);
+  const numericKeys = Object.keys(value)
+    .filter((key) => /^\d+$/.test(key))
+    .sort((left, right) => Number(left) - Number(right));
+  if (numericKeys.length >= 12) return numericKeys.map((key) => value[key]);
+  for (const key of INVITE_WRAPPER_KEYS) {
+    const nested = findInviteArray(value[key], depth + 1, seen);
+    if (nested) return nested;
+  }
+  return null;
+}
+
+
+export function normalizeInvitePayload(value) {
+  const invite = findInviteArray(value);
+  if (!invite) return { invite: null, callerUid: null, reason: "invite payload invalid" };
+  const callerUid = extractCallerUid(invite[1]) ?? extractCallerUid(value);
+  const normalizedInvite = invite.slice();
+  if (callerUid) normalizedInvite[1] = callerUid;
+  return {
+    invite: normalizedInvite,
+    callerUid,
+    reason: callerUid ? null : "callerUid missing",
+  };
+}

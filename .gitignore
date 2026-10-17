@@ -13,3 +13,4 @@ config.json
 .env
 *.token
 *.secret
+/temp/

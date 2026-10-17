@@ -13,6 +13,7 @@ import {
   normalizeStaticArtifactsDiagnosticStart,
   normalizeVisibleSurfaceDiagnosticStart,
   normalizeRuntimeConfig,
+  normalizeInvitePayload,
   serializeCaptureValue,
   shouldAcceptCaller,
 } from "../protocol.mjs";
@@ -47,6 +48,13 @@ test("builds the native AVSDK accept parameters", () => {
     true,
     "extra",
   ]);
+});
+
+test("requires a Token for the public voice bridge", () => {
+  assert.throws(
+    () => deriveBridgeSettings({ serverUrl: "ws://127.0.0.1:6199/ws" }, {}),
+    /requires the OneBot reverse WebSocket token/,
+  );
 });
 
 test("private caller filters are deterministic", () => {
@@ -180,4 +188,21 @@ test("serializes buffers and circular values without exposing unbounded objects"
     data: "abcd",
   });
   assert.deepEqual(serialized.self, { $type: "Circular", path: "$" });
+});
+
+
+test("normalizes numeric and wrapped caller UIDs without changing invite positions", () => {
+  const numeric = [3, 3502688801, "self-uid", 1, "room", 0, 0, 0, 0, 0, 1, "extra"];
+  const wrapped = { invite: [3, { uid: "caller-uid" }, "self-uid", 1, "room", 0, 0, 0, 0, 0, 1, "extra"] };
+
+  assert.deepEqual(normalizeInvitePayload(numeric), {
+    invite: [3, "3502688801", "self-uid", 1, "room", 0, 0, 0, 0, 0, 1, "extra"],
+    callerUid: "3502688801",
+    reason: null,
+  });
+  assert.deepEqual(normalizeInvitePayload(wrapped), {
+    invite: [3, "caller-uid", "self-uid", 1, "room", 0, 0, 0, 0, 0, 1, "extra"],
+    callerUid: "caller-uid",
+    reason: null,
+  });
 });

@@ -1,10 +1,9 @@
 /**
- * QQ 原生语音通话 NapCat 插件。
+ * Linux/Docker NapCat QQ 私聊原生语音来电插件。
  *
  * AVSDK 信令状态机适配自 maibot-qq-voice-call (GPL-3.0-only)：
  * https://github.com/ClaudiaGardner/maibot-qq-voice-call
- * 本版本改为 Windows/虚拟机 NapCat 主动连接 OneBot，并把 AVSDK Host
- * 通过独立 QQ/Electron AVSDK Host 加载 PPAPI 插件；OneBot 连接断开时会立即销毁 Listener 和 Host。
+ * 独立 QQ/Electron AVSDK Host 承载 PPAPI 插件，控制端断开时清理 Listener 和 Host。
  */
 
 import crypto from "node:crypto";
@@ -26,6 +25,8 @@ import {
   PROTOCOL_VERSION,
   buildAcceptParams,
   deriveBridgeSettings,
+  extractCallerUid,
+  normalizeInvitePayload,
   normalizeDiagnosticCaptureStart,
   normalizeAVSDKServiceSurfaceDiagnosticStart,
   normalizeStaticArtifactsDiagnosticStart,
@@ -47,7 +48,12 @@ const {
   sanitizeStaticArtifactReport,
 } = staticArtifactModule;
 
-const PLUGIN_VERSION = "0.1.7";
+const PLUGIN_VERSION = "0.2.0";
+// 从登录命令实际发出时计时，首次、失败重试和桥重连使用同一最小间隔。
+const AVSDK_LOGIN_MIN_INTERVAL_MS = 60000;
+let lastAvsdkLoginAt = Number.NEGATIVE_INFINITY;
+// 跨激活代次共享在途请求，避免旧 Host 的迟到结果与新一代登录重叠。
+let avsdkLoginInFlight = null;
 const STATIC_AVSDK_PLUGIN_PATH = "/opt/QQ/resources/app/avsdk/libAVSDKPlugin.so";
 let context = null;
 let logger = null;
@@ -88,6 +94,7 @@ let loginTimer = null;
 let nextInvocationId = 1;
 let runtimeConfig = normalizeRuntimeConfig();
 let activationPromise = null;
+let cleanupPromise = null;
 let diagnosticCapture = null;
 let diagnosticFinalizePromise = null;
 let visibleSurfaceDiagnostic = null;
@@ -119,6 +126,9 @@ function idleAVSDK() {
     hostDiagnostics: null,
     rendererDiagnostics: null,
     loginPosted: false,
+    loginSuppressed: 0, // 等待重登或登录在途时合并的重复回调数。
+    lastLoginAt: null,
+    lastLoginResult: null,
     lastOutputCommand: null,
     outputCount: 0,
     commandCounts: {},
@@ -197,11 +207,13 @@ function normalizeHostSettings() {
   const avsdkPath = String(
     source.avsdkPath ?? "/opt/QQ/resources/app/avsdk/libAVSDKPlugin.so",
   ).trim();
-  const defaultLoaderPath = path.resolve(
-    context?.pluginPath ?? ".",
-    "../../..",
-    "loadNapCat.js",
-  );
+  // Shell launcher 在工作目录生成入口；Docker 镜像直接修改 QQ 的物理入口。
+  const loaderCandidates = [
+    path.resolve(context?.pluginPath ?? ".", "../../..", "loadNapCat.js"),
+    path.resolve(path.dirname(qqExecutable), "resources/app/loadNapCat.js"),
+  ];
+  const defaultLoaderPath = loaderCandidates.find((candidate) => fs.existsSync(candidate))
+    ?? loaderCandidates[0];
   const loaderPath = path.resolve(
     String(source.loaderPath ?? "").trim() || defaultLoaderPath,
   );
@@ -362,31 +374,44 @@ function requestHost(pathname, method = "GET", body = undefined) {
 function stopHostProcess() {
   const child = hostProcess;
   hostProcess = null;
-  if (!child || child.killed || child.exitCode !== null) return Promise.resolve();
-  return new Promise((resolve) => {
+  // killed 只表示已经发送过信号，不能证明子进程已退出。
+  if (!child || child.exitCode !== null || child.signalCode != null) return Promise.resolve();
+  return new Promise((resolve, reject) => {
     let settled = false;
-    const finish = () => {
+    let killTimer = null;
+    const finish = (error = null) => {
       if (settled) return;
       settled = true;
-      resolve();
+      if (killTimer) clearTimeout(killTimer);
+      child.removeListener("exit", onExit);
+      if (error) {
+        // 终止失败时保留句柄，让后续清理重试，禁止把旧 Host 当作已释放。
+        if (!hostProcess) hostProcess = child;
+        reject(error);
+      } else {
+        resolve();
+      }
     };
-    child.once("exit", finish);
+    const onExit = () => finish();
+    child.once("exit", onExit);
     try {
       child.kill("SIGTERM");
-    } catch {
-      finish();
+    } catch (error) {
+      finish(error);
       return;
     }
-    setTimeout(() => {
+    if (settled) return;
+    killTimer = setTimeout(() => {
       if (!settled) {
         try {
           child.kill("SIGKILL");
-        } catch {
-          // 进程已退出时忽略二次终止错误。
+        } catch (error) {
+          finish(error);
         }
-        finish();
+        // 发信号不等于已经退出；由 exit 回执完成释放后才允许下一代启动。
       }
-    }, 2500).unref?.();
+    }, 2500);
+    killTimer.unref?.();
   });
 }
 
@@ -1230,8 +1255,15 @@ async function handleCallControl(message) {
 
 function mapValue(value, key) {
   if (!value) return null;
-  if (typeof value.get === "function") return value.get(key) ?? null;
-  return typeof value === "object" ? value[key] ?? null : null;
+  if (value instanceof Map || typeof value.get === "function") {
+    return value.get(key) ?? value.get(Number(key)) ?? null;
+  }
+  if (typeof value !== "object") return null;
+  if (value[key] !== undefined && value[key] !== null) return value[key];
+  if (Array.isArray(value)) {
+    return value.find((item) => item && typeof item === "object" && String(item.uid ?? item.uin ?? "") === String(key)) ?? null;
+  }
+  return value;
 }
 
 function firstString(...values) {
@@ -1244,12 +1276,19 @@ function firstString(...values) {
 async function resolveCallerIdentity(uid, inviteAt) {
   let uin = null;
   let profile = null;
+  let resolutionReason = "uin service unavailable";
   try {
-    const result = await context?.core?.context?.session?.getUixConvertService?.().getUin([uid]);
-    const resolved = mapValue(result?.uinInfo, uid);
-    if (resolved !== null && String(resolved) !== "0") uin = String(resolved);
+    const service = context?.core?.context?.session?.getUixConvertService?.();
+    if (!service || typeof service.getUin !== "function") {
+      resolutionReason = "uin service unavailable";
+    } else {
+      const result = await service.getUin([uid]);
+      const resolved = mapValue(result?.uinInfo, uid) ?? result?.uinInfo;
+      uin = extractCallerUid(resolved);
+      resolutionReason = uin ? null : "uin conversion empty";
+    }
   } catch {
-    // 继续尝试 Profile 服务，身份解析失败不能中断普通来电状态机。
+    resolutionReason = "uin service unavailable";
   }
   try {
     const profiles = await context?.core?.eventWrapper?.callNoListenerEvent?.(
@@ -1258,12 +1297,15 @@ async function resolveCallerIdentity(uid, inviteAt) {
       [uid],
     );
     profile = mapValue(profiles, uid);
-    const profileUin = profile?.uin ?? profile?.coreInfo?.uin;
-    if (!uin && profileUin !== null && profileUin !== undefined && String(profileUin) !== "0") {
-      uin = String(profileUin);
+    const profileUin = extractCallerUid(profile?.uin ?? profile?.coreInfo?.uin ?? profile);
+    if (!uin && profileUin) {
+      uin = profileUin;
+      resolutionReason = null;
+    } else if (!uin) {
+      resolutionReason = "profile fallback empty";
     }
   } catch {
-    // 名称只用于状态展示，不影响未配置名单时的自动接听。
+    if (!uin) resolutionReason = "profile service unavailable";
   }
   if (state.call.inviteAt !== inviteAt || state.call.callerUid !== uid) return;
   state.call.callerUin = uin;
@@ -1275,6 +1317,9 @@ async function resolveCallerIdentity(uid, inviteAt) {
     profile?.coreInfo?.remark,
     profile?.coreInfo?.nick,
   );
+  if (!uin) {
+    logger?.warn(`[QQVoiceCall] caller identity unresolved: reason=${resolutionReason}`);
+  }
   sendStatus();
 }
 
@@ -1487,14 +1532,23 @@ async function handleAVSDKOutput(_event, incoming) {
       throw new Error("setActionFromAVSDK is unavailable");
     }
     await avsdkService.setActionFromAVSDK(value[0], value[1]);
-  } else if (command === 20006 && Array.isArray(value)) {
-    activeInvite = value;
-    const callerUid = typeof value[1] === "string" ? value[1] : null;
+  } else if (command === 20006) {
+    const normalized = normalizeInvitePayload(value);
+    if (!normalized.invite) {
+      logger?.warn(
+        `[QQVoiceCall] invite output ignored: reason=${normalized.reason} ` +
+        `value=${summarizeKernelArg(rawValue)}`,
+      );
+      sendStatus();
+      return;
+    }
+    activeInvite = normalized.invite;
+    const callerUid = normalized.callerUid;
     state.call.callerUid = callerUid;
     state.call.inviteReceivedAt = new Date().toISOString();
     logger?.info(
       `[QQVoiceCall] invite received: ` +
-      `items=${value.length}, callerUid=${callerUid ? "present" : "missing"}`,
+      `items=${activeInvite.length}, callerUid=${callerUid ? "present" : "missing"}`,
     );
 
     const decideAndSchedule = () => {
@@ -1545,11 +1599,6 @@ async function handleAVSDKOutput(_event, incoming) {
     } else {
       decideAndSchedule();
     }
-  } else if (command === 20006) {
-    logger?.warn(
-      `[QQVoiceCall] invite output has invalid payload; auto-accept skipped ` +
-      `value=${summarizeKernelArg(rawValue)}`,
-    );
   } else if (command === 5) {
     const resultCode = Array.isArray(value) && Number.isFinite(Number(value[0]))
       ? Number(value[0])
@@ -1569,14 +1618,19 @@ async function handleAVSDKOutput(_event, incoming) {
       state.call.phase = "ringing";
     }
     logger?.info(`[QQVoiceCall] enter-room result: code=${String(resultCode)}`);
-  } else if ((command === 20050 || command === 120043) && state.avsdk.loginPosted) {
-    scheduleLogin(100);
+  } else if (command === 20050 || command === 120043) {
+    if (state.avsdk.loginPosted) {
+      scheduleLogin(100);
+    } else {
+      state.avsdk.loginSuppressed += 1;
+    }
   }
   state.lastError = null;
   sendStatus();
 }
 
 async function createAVSDKHost() {
+  if (hostProcess) throw new Error("上一代 AVSDK Host 尚未退出，请先完成清理");
   hostSettings = normalizeHostSettings();
   if (!fs.existsSync(hostSettings.qqExecutable)) {
     throw new Error(`QQ 可执行文件不存在：${hostSettings.qqExecutable}`);
@@ -1640,22 +1694,25 @@ async function createAVSDKHost() {
     `--register-pepper-plugins=${hostSettings.avsdkPath};application/x-ppapi-avSDK`,
   ];
   if (hostSettings.userDataDir) args.push(`--user-data-dir=${hostSettings.userDataDir}`);
-  hostProcess = spawn(hostSettings.qqExecutable, args, {
+  const child = spawn(hostSettings.qqExecutable, args, {
     cwd: path.dirname(hostSettings.loaderPath),
     env,
     stdio: ["ignore", "pipe", "pipe"],
   });
-  hostProcess.stdout?.on("data", (chunk) => {
+  hostProcess = child;
+  child.stdout?.on("data", (chunk) => {
     logger?.info(`[QQVoiceCall][AVSDK Host] ${String(chunk).trim().slice(0, 500)}`);
   });
-  hostProcess.stderr?.on("data", (chunk) => {
+  child.stderr?.on("data", (chunk) => {
     logger?.warn(`[QQVoiceCall][AVSDK Host] ${String(chunk).trim().slice(0, 500)}`);
   });
-  hostProcess.on("error", (error) => {
+  child.on("error", (error) => {
+    if (hostProcess !== child) return;
     state.avsdk.hostReady = false;
     setError(`AVSDK Host 启动失败: ${error?.message ?? error}`);
   });
-  hostProcess.on("exit", (code, signal) => {
+  child.on("exit", (code, signal) => {
+    if (hostProcess !== child) return;
     state.avsdk.hostReady = false;
     if (state.active) {
       setError(`AVSDK Host 已退出: code=${code ?? "null"}, signal=${signal ?? "null"}`);
@@ -1756,19 +1813,41 @@ async function invokeAVSDK(command, params) {
 }
 
 function scheduleLogin(delayMs = 500) {
-  if (loginTimer) clearTimeout(loginTimer);
+  if (!state.active || loginTimer) return;
+  const avsdk = state.avsdk;
+  // 先关闭回调闸门，保留一个到期任务；持续回调不会取消或提前这个任务。
+  avsdk.loginPosted = false;
+  const waitMs = Math.max(delayMs, AVSDK_LOGIN_MIN_INTERVAL_MS - (Date.now() - lastAvsdkLoginAt));
   loginTimer = setTimeout(() => {
     loginTimer = null;
-    postLogin().catch((error) => {
-      setError(`AVSDK login failed: ${error?.message ?? error}`);
-      if (state.active) scheduleLogin(Math.min(delayMs * 2, 5000));
-    });
-  }, delayMs);
+    if (!state.active || state.avsdk !== avsdk) return;
+    if (avsdkLoginInFlight) {
+      const resume = () => {
+        if (state.active && state.avsdk === avsdk) scheduleLogin(delayMs);
+      };
+      void avsdkLoginInFlight.then(resume, resume);
+      return;
+    }
+    const pending = postLogin();
+    avsdkLoginInFlight = pending;
+    void pending.then(
+      () => {
+        if (avsdkLoginInFlight === pending) avsdkLoginInFlight = null;
+      },
+      (error) => {
+        if (avsdkLoginInFlight === pending) avsdkLoginInFlight = null;
+        if (!state.active || state.avsdk !== avsdk) return;
+        setError(`AVSDK login failed: ${error?.message ?? error}`);
+        scheduleLogin(Math.min(delayMs * 2, 5000));
+      },
+    );
+  }, waitMs);
   loginTimer.unref?.();
 }
 
 async function postLogin() {
   if (!state.active) return;
+  const avsdk = state.avsdk;
   const session = context.core?.context?.session;
   const selfUid = String(context.core?.selfInfo?.uid ?? "");
   const selfUin = String(context.core?.selfInfo?.uin ?? "");
@@ -1776,12 +1855,22 @@ async function postLogin() {
     session?.getAccountPath?.(Number.parseInt(selfUin, 10)) || context.core?.dataPath || "",
   );
   if (!selfUid || !selfUin || !accountPath) throw new Error("QQ identity/account path is unavailable");
-  await invokeAVSDK(1, [selfUid, selfUin, selfUin, accountPath, ""]);
-  state.avsdk.loginPosted = true;
+  // 首次发起也计入间隔，抛错同样消耗本次登录额度，避免异常分支重复发送。
+  lastAvsdkLoginAt = Date.now();
+  avsdk.lastLoginAt = new Date(lastAvsdkLoginAt).toISOString();
+  avsdk.lastLoginResult = null;
+  const loginResult = await invokeAVSDK(1, [selfUid, selfUin, selfUin, accountPath, ""]);
+  if (!state.active || state.avsdk !== avsdk) return;
+  // loginPosted 仅表示命令已提交；摘要只记录返回结构，原生登录结果需结合通话确认。
+  avsdk.lastLoginResult = summarizeKernelArg(loginResult);
+  avsdk.loginPosted = true;
   sendStatus();
 }
 
 async function activateRuntime(incomingConfig) {
+  // Host 退出和桥断开均可触发清理；新一代必须等旧资源释放完毕。
+  if (cleanupPromise) await cleanupPromise;
+  if (shuttingDown || !context) return;
   runtimeConfig = normalizeRuntimeConfig(incomingConfig);
   if (state.active) {
     sendStatus();
@@ -1820,7 +1909,24 @@ async function activateRuntime(incomingConfig) {
   }
 }
 
-async function cleanupAVSDKResources(reason) {
+function cleanupAVSDKResources(reason) {
+  if (cleanupPromise) return cleanupPromise;
+  const pending = releaseAVSDKResources(reason);
+  cleanupPromise = pending;
+  const finish = () => {
+    if (cleanupPromise === pending) cleanupPromise = null;
+  };
+  void pending.then(finish, finish);
+  return pending;
+}
+
+
+async function releaseAVSDKResources(reason) {
+  state.active = false;
+  clearAcceptTimer();
+  if (loginTimer) clearTimeout(loginTimer);
+  loginTimer = null;
+  activeInvite = null;
   if (diagnosticCapture) {
     recordDiagnosticCaptureEvent("call_state_terminal", {
       phase: state.call.phase,
@@ -1835,12 +1941,6 @@ async function cleanupAVSDKResources(reason) {
   } else if (diagnosticFinalizePromise) {
     await diagnosticFinalizePromise;
   }
-  state.active = false;
-  clearAcceptTimer();
-  if (loginTimer) clearTimeout(loginTimer);
-  loginTimer = null;
-  activeInvite = null;
-
   if (avsdkService && listenerId !== null && typeof avsdkService.removeKernelAVSDKListener === "function") {
     try {
       avsdkService.removeKernelAVSDKListener(listenerId);

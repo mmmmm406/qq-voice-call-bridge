@@ -1,12 +1,12 @@
-# OneBot 端插件
+# OneBot 宿主接入参考
 
-这是帮助 OneBot 增加 QQ 私聊原生语音通话能力的一侧插件。
+本目录提供一种将 NapCat 语音插件接入 OneBot 宿主的参考实现。仓库的主要交付是 [NapCat 语音插件](../napcat-plugin/README.md)；其它控制端可以直接实现 [桥接协议 v1](../docs/bridge-protocol.md)。
 
 它接收 NapCat 传来的来电和通话状态，按准入规则决定是否处理，再把 ASR、TTS、声纹和文本模型串起来。NapCat 端负责 QQ/AVSDK 一侧；两端需要配套使用。
 
 ## 目录中有哪些内容
 
-- plugins/qq_voice_call/：必须安装的通话桥和电话对话运行时。
+- plugins/qq_voice_call/：采用本参考实现时安装的通话桥和电话对话运行时。
 - plugins/astrbot_plugin_qq_voice_call/：可选的 AstrBot 工具插件，让模型能够查询状态、接听、拒接和挂断。
 - config.example.json：脱敏配置模板，默认关闭桥和 AI 对话。
 - requirements.txt：通话桥自身的直接 Python 依赖；ASR、TTS、声纹和模型依赖由宿主提供。

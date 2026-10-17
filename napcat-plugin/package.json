@@ -1,16 +1,25 @@
 {
   "name": "qq-voice-call",
   "plugin": "QQ语音通话",
-  "version": "0.1.7",
+  "version": "0.2.0",
   "type": "module",
   "main": "index.mjs",
-  "description": "帮助 OneBot 接入 QQ 私聊原生语音通话的 NapCat 端桥接插件",
+  "description": "Linux/Docker NapCat QQ 私聊原生语音来电与 WebSocket 控制桥",
   "author": "QQ Voice Call contributors",
   "license": "GPL-3.0-only",
-  "keywords": ["napcat", "qq", "voice-call", "onebot"],
+  "keywords": [
+    "napcat",
+    "qq",
+    "voice-call",
+    "docker",
+    "onebot"
+  ],
   "napcat": {
-    "tags": ["工具", "机器人"],
+    "tags": [
+      "工具",
+      "机器人"
+    ],
     "minVersion": "4.9.0",
-    "homepage": "https://github.com/NapNeko/NapCatQQ"
+    "homepage": "https://github.com/mmmmm406/qq-voice-call-bridge"
   }
 }

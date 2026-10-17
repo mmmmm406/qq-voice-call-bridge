@@ -1,8 +1,10 @@
-# NapCat 端插件
+# NapCat 语音插件
 
-这一端负责 QQ/AVSDK：发现 QQ 私聊原生语音来电、启动独立的 AVSDK Host、收发通话音频，并把状态交给 OneBot 端。
+为 Linux NapCat 提供 QQ 私聊原生语音来电、独立 AVSDK Host、来电状态与接听控制。通过已鉴权的 WebSocket 接入机器人控制端，协议版本为 1。
 
-它不能单独完成 AI 对话。OneBot 端负责准入、模型、ASR、TTS 和通话运行时；两端必须来自同一个发布版本。
+**Docker 用户从 [Docker 安装说明](../docker/README.md) 开始。** 下文介绍 Linux Shell 的目录安装与通用连接设置。
+
+控制端按 [桥接协议 v1](../docs/bridge-protocol.md) 实现，也可使用 [OneBot 接入参考](../onebot-plugin/README.md)。AI 对话由控制端提供 ASR、TTS、模型和音频路由；WebSocket 承载控制、信令和状态，声音由 QQ/AVSDK 的音频设备传输。
 
 ## 安装前确认
 
@@ -14,7 +16,7 @@
 4. 你已经准备好普通反向 WebSocket 的地址、端口和 Bearer Token。
 5. 如果 NapCat 在虚拟机中，虚拟机网络不是只允许访问本机回环地址。
 
-当前公开版优先适配通过 NAPCAT_BOOTMAIN 分流的 NapCat Linux launcher。默认 AVSDK 路径也是 Linux 路径；其他平台或其他 launcher 需要先核对路径和加载方式。
+当前支持 Linux Shell 与标准 Linux Docker 布局。Shell 使用 NAPCAT_BOOTMAIN 分流；Docker 安装器适配 QQ 的物理 Loader。其它平台或布局需要先核对路径和加载方式。
 
 ## 第一步：复制完整目录
 
@@ -97,7 +99,7 @@ AVSDK 文件：/opt/QQ/resources/app/avsdk/libAVSDKPlugin.so
 | --- | --- |
 | avHost.qqExecutable | QQ 可执行文件的绝对路径 |
 | avHost.avsdkPath | libAVSDKPlugin.so 的绝对路径 |
-| avHost.loaderPath | 只有需要兼容旧版 loader 时才填写 |
+| avHost.loaderPath | 缺省先查找 Shell 入口，再查找 QQ 安装目录的 resources/app/loadNapCat.js；自定义入口时填写 |
 | avHost.controlHost | 仅允许 127.0.0.1 或 ::1 |
 | avHost.controlPort | Host 控制端口，默认 6110 |
 | avHost.hostPort | Host 页面端口，默认 6111 |
